@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 const app = express();
@@ -11,42 +11,53 @@ let sock;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`[SISTEMA] Usando WhatsApp v${version.join('.')}, isLatest: ${isLatest}`);
+
     sock = makeWASocket({
+        version,
         auth: state,
         printQRInTerminal: true,
-        logger: pino({ level: 'silent' }) // Mantém os logs limpos no Render
+        // Oculta que é um bot, simulando o Google Chrome no Windows
+        browser: ['Caseirinhas TATÁ', 'Chrome', '10.0.0'],
+        logger: pino({ level: 'error' }) // Mostra apenas erros reais e o QR Code
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        if(qr) {
+            console.log('\n==================================================');
+            console.log('📸 SCANNEIE O QR CODE ABAIXO PELO SEU WHATSAPP');
+            console.log('==================================================\n');
+        }
+
         if(connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('⚠️ Conexão fechada. Reconectando:', shouldReconnect);
-            if(shouldReconnect) connectToWhatsApp();
+            console.log(`⚠️ Conexão fechada. Motivo: ${lastDisconnect.error?.message || 'Desconhecido'}`);
+            
+            if(shouldReconnect) {
+                console.log('🔄 Tentando reconectar em 5 segundos para evitar bloqueio...');
+                setTimeout(connectToWhatsApp, 5000); // Pausa de segurança de 5 segundos
+            } else {
+                console.log('❌ O WhatsApp foi desconectado pelo celular. Apague a pasta auth_info_baileys e reinicie.');
+            }
         } else if(connection === 'open') {
-            console.log('✅ CONECTADO AO WHATSAPP DA TATÁ! (43 9 9982-1401)');
+            console.log('\n✅ CONECTADO AO WHATSAPP DA TATÁ! (43 9 9982-1401)\n');
         }
     });
 }
 
 connectToWhatsApp();
 
-// Rota de Saúde (Para manter o Render acordado 24h)
 app.get('/', (req, res) => res.send('🟢 WhatsApp Engine Online'));
 
-// Rota de Disparo (Recebe o comando do Vercel)
 app.post('/api/send', async (req, res) => {
     const { secret, phone, message } = req.body;
-    
-    if(secret !== process.env.API_SECRET) {
-        return res.status(401).json({error: 'Não autorizado'});
-    }
-
+    if(secret !== process.env.API_SECRET) return res.status(401).json({error: 'Não autorizado'});
     try {
-        // Formata o número para o padrão do WhatsApp (55 + DDD + Numero)
         const jid = `55${phone}@s.whatsapp.net`;
         await sock.sendMessage(jid, { text: message });
         res.json({ success: true, message: 'Enviado com sucesso' });
