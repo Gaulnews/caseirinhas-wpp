@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 const app = express();
@@ -8,64 +8,70 @@ app.use(cors());
 app.use(express.json());
 
 let sock;
+const NUMERO_WPP = "5543999821401";
 
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(`[SISTEMA] Usando WhatsApp v${version.join('.')}, isLatest: ${isLatest}`);
+async function iniciarMotor() {
+    const { state, saveCreds } = await useMultiFileAuthState('sessao_segura_tata');
+    const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: true,
-        // Oculta que é um bot, simulando o Google Chrome no Windows
-        browser: ['Caseirinhas TATÁ', 'Chrome', '10.0.0'],
-        logger: pino({ level: 'error' }) // Mostra apenas erros reais e o QR Code
+        printQRInTerminal: false, // DESATIVA O QR CODE!
+        logger: pino({ level: 'silent' }),
+        browser: ['Ubuntu', 'Chrome', '20.0.04']
     });
+
+    if (!sock.authState.creds.registered) {
+        console.log("⏳ Aguardando sincronização com a Meta...");
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(NUMERO_WPP);
+                console.log('\n======================================================');
+                console.log('🚨 AÇÃO NECESSÁRIA NO SEU WHATSAPP 🚨');
+                console.log(`CÓDIGO DE EMPARELHAMENTO: ${code}`);
+                console.log('======================================================\n');
+            } catch (err) {
+                console.log('Erro ao gerar código:', err.message);
+            }
+        }, 5000);
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if(qr) {
-            console.log('\n==================================================');
-            console.log('📸 SCANNEIE O QR CODE ABAIXO PELO SEU WHATSAPP');
-            console.log('==================================================\n');
-        }
-
+        const { connection, lastDisconnect } = update;
         if(connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(`⚠️ Conexão fechada. Motivo: ${lastDisconnect.error?.message || 'Desconhecido'}`);
-            
-            if(shouldReconnect) {
-                console.log('🔄 Tentando reconectar em 5 segundos para evitar bloqueio...');
-                setTimeout(connectToWhatsApp, 5000); // Pausa de segurança de 5 segundos
+            const reason = lastDisconnect.error?.output?.statusCode;
+            if (reason !== DisconnectReason.loggedOut) {
+                setTimeout(iniciarMotor, 4000);
             } else {
-                console.log('❌ O WhatsApp foi desconectado pelo celular. Apague a pasta auth_info_baileys e reinicie.');
+                console.log('❌ Sessão desconectada pelo celular.');
             }
         } else if(connection === 'open') {
-            console.log('\n✅ CONECTADO AO WHATSAPP DA TATÁ! (43 9 9982-1401)\n');
+            console.log('\n✅ CONECTADO AO WHATSAPP DA TATÁ NO RENDER! (43 9 9982-1401)\n');
         }
     });
 }
 
-connectToWhatsApp();
+iniciarMotor();
 
 app.get('/', (req, res) => res.send('🟢 WhatsApp Engine Online'));
 
 app.post('/api/send', async (req, res) => {
     const { secret, phone, message } = req.body;
-    if(secret !== process.env.API_SECRET) return res.status(401).json({error: 'Não autorizado'});
+    // Valida a senha da Vercel
+    if(secret !== 'senha_secreta_tata_2026') return res.status(401).json({error: 'Não autorizado'});
+    
     try {
-        const jid = `55${phone}@s.whatsapp.net`;
+        const jid = `55${phone.replace(/\D/g, '')}@s.whatsapp.net`;
         await sock.sendMessage(jid, { text: message });
-        res.json({ success: true, message: 'Enviado com sucesso' });
+        res.json({ success: true, message: 'Disparo efetuado com sucesso pelo Render.' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Falha ao enviar' });
+        res.status(500).json({ error: 'Falha ao enviar.' });
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`⚙️  Servidor Render rodando na porta ${PORT}...`));
