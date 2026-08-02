@@ -8,6 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 let sock;
+let isConnected = false;
 const NUMERO_WPP = "5543999821401";
 
 async function iniciarMotor() {
@@ -17,7 +18,7 @@ async function iniciarMotor() {
     sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: false, // DESATIVA O QR CODE!
+        printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: ['Ubuntu', 'Chrome', '20.0.04']
     });
@@ -42,13 +43,16 @@ async function iniciarMotor() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if(connection === 'close') {
+            isConnected = false;
             const reason = lastDisconnect.error?.output?.statusCode;
+            console.log(`⚠️ Conexão fechada. Motivo / StatusCode: ${reason}`);
             if (reason !== DisconnectReason.loggedOut) {
                 setTimeout(iniciarMotor, 4000);
             } else {
-                console.log('❌ Sessão desconectada pelo celular.');
+                console.log('❌ Sessão desconectada pelo celular. Refaça o emparelhamento.');
             }
         } else if(connection === 'open') {
+            isConnected = true;
             console.log('\n✅ CONECTADO AO WHATSAPP DA TATÁ NO RENDER! (43 9 9982-1401)\n');
         }
     });
@@ -56,20 +60,26 @@ async function iniciarMotor() {
 
 iniciarMotor();
 
-app.get('/', (req, res) => res.send('🟢 WhatsApp Engine Online'));
+app.get('/', (req, res) => res.send(`🟢 WhatsApp Engine Online | Status Conectado: ${isConnected}`));
 
 app.post('/api/send', async (req, res) => {
     const { secret, phone, message } = req.body;
-    // Valida a senha da Vercel
     if(secret !== 'senha_secreta_tata_2026') return res.status(401).json({error: 'Não autorizado'});
     
+    // Trava de segurança: impede o erro 428 se o WhatsApp ainda não estiver pronto
+    if (!isConnected || !sock) {
+        return res.status(503).json({ error: 'WhatsApp ainda não está sincronizado ou conectado no Render. Aguarde alguns segundos.' });
+    }
+
     try {
-        const jid = `55${phone.replace(/\D/g, '')}@s.whatsapp.net`;
+        const cleanPhone = phone.replace(/\D/g, '');
+        const jid = `${cleanPhone}@s.whatsapp.net`;
+        
         await sock.sendMessage(jid, { text: message });
         res.json({ success: true, message: 'Disparo efetuado com sucesso pelo Render.' });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Falha ao enviar.' });
+        console.error('Erro detalhado no envio Baileys:', error);
+        res.status(500).json({ error: 'Falha ao enviar mensagem.', details: error.message });
     }
 });
 
