@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const fs = require('fs');
 
 const app = express();
 app.use(cors());
@@ -9,11 +10,12 @@ app.use(express.json());
 
 let sock;
 let isConnected = false;
-let ultimasRespostas = []; // Armazena as últimas interações dos clientes
+let ultimasRespostas = [];
 const NUMERO_WPP = "5543999821401";
+const SESSION_DIR = 'sessao_segura_tata';
 
 async function iniciarMotor() {
-    const { state, saveCreds } = await useMultiFileAuthState('sessao_segura_tata');
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
@@ -21,33 +23,33 @@ async function iniciarMotor() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ['Caseirinhas Engine', 'Chrome', '120.0.0']
+        browser: ['Chrome (Windows)', 'Chrome', '120.0.0']
     });
-
-    if (!sock.authState.creds.registered) {
-        console.log("⏳ Aguardando sincronização com a Meta...");
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(NUMERO_WPP);
-                console.log(`\nCÓDIGO DE EMPARELHAMENTO: ${code}\n`);
-            } catch (err) {
-                console.log('Erro ao gerar código:', err.message);
-            }
-        }, 5000);
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Captura mensagens recebidas (Respostas dos Leads)
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                console.log("⏳ Estabelecendo canal seguro com a Meta...");
+                const code = await sock.requestPairingCode(NUMERO_WPP);
+                const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
+                console.log('\n======================================================');
+                console.log('🚨 AÇÃO NECESSÁRIA NO SEU WHATSAPP 🚨');
+                console.log(`CÓDIGO DE EMPARELHAMENTO: ${formattedCode}`);
+                console.log('======================================================\n');
+            } catch (err) {
+                console.log('Erro ao gerar código de emparelhamento:', err.message);
+            }
+        }, 8000); // Aguarda 8 segundos para estabilizar a conexão antes de pedir o código
+    }
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.key.fromMe && msg.message) {
             const remetente = msg.key.remoteJid;
             const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Mídia/Outro]';
             
-            console.log(`📩 Resposta recebida de ${remetente}: ${texto}`);
-            
-            // Salva no histórico em memória recente (ou banco de dados)
             ultimasRespostas.unshift({
                 telefone: remetente.replace('@s.whatsapp.net', ''),
                 mensagem: texto,
@@ -62,12 +64,19 @@ async function iniciarMotor() {
         if(connection === 'close') {
             isConnected = false;
             const reason = lastDisconnect.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) {
-                setTimeout(iniciarMotor, 4000);
+            console.log(`⚠️ Conexão fechada. Motivo / StatusCode: ${reason}`);
+            
+            // Se houver logout ou erro crítico de sessão, limpa a pasta para forçar novo emparelhamento limpo
+            if (reason === DisconnectReason.loggedOut || reason === 428 || reason === 401) {
+                console.log('🧹 Limpando sessão corrompida...');
+                try {
+                    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+                } catch(e) {}
             }
+            setTimeout(iniciarMotor, 5000);
         } else if(connection === 'open') {
             isConnected = true;
-            console.log('\n✅ MOTOR DE RASTREIO E DISPARO CONECTADO!\n');
+            console.log('\n✅ CONECTADO AO WHATSAPP DA TATÁ NO RENDER! (43 9 9982-1401)\n');
         }
     });
 }
@@ -76,7 +85,6 @@ iniciarMotor();
 
 app.get('/', (req, res) => res.send(`🟢 Engine Ativa | Conectado: ${isConnected}`));
 
-// Rota para o painel consultar as respostas recebidas em tempo real
 app.get('/api/responses', (req, res) => {
     res.json({ success: true, respostas: ultimasRespostas });
 });
