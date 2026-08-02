@@ -9,6 +9,7 @@ app.use(express.json());
 
 let sock;
 let isConnected = false;
+let ultimasRespostas = []; // Armazena as últimas interações dos clientes
 const NUMERO_WPP = "5543999821401";
 
 async function iniciarMotor() {
@@ -20,7 +21,7 @@ async function iniciarMotor() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '20.0.04']
+        browser: ['Caseirinhas Engine', 'Chrome', '120.0.0']
     });
 
     if (!sock.authState.creds.registered) {
@@ -28,10 +29,7 @@ async function iniciarMotor() {
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(NUMERO_WPP);
-                console.log('\n======================================================');
-                console.log('🚨 AÇÃO NECESSÁRIA NO SEU WHATSAPP 🚨');
-                console.log(`CÓDIGO DE EMPARELHAMENTO: ${code}`);
-                console.log('======================================================\n');
+                console.log(`\nCÓDIGO DE EMPARELHAMENTO: ${code}\n`);
             } catch (err) {
                 console.log('Erro ao gerar código:', err.message);
             }
@@ -40,35 +38,55 @@ async function iniciarMotor() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Captura mensagens recebidas (Respostas dos Leads)
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.key.fromMe && msg.message) {
+            const remetente = msg.key.remoteJid;
+            const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Mídia/Outro]';
+            
+            console.log(`📩 Resposta recebida de ${remetente}: ${texto}`);
+            
+            // Salva no histórico em memória recente (ou banco de dados)
+            ultimasRespostas.unshift({
+                telefone: remetente.replace('@s.whatsapp.net', ''),
+                mensagem: texto,
+                horario: new Date().toLocaleTimeString()
+            });
+            if (ultimasRespostas.length > 50) ultimasRespostas.pop();
+        }
+    });
+
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if(connection === 'close') {
             isConnected = false;
             const reason = lastDisconnect.error?.output?.statusCode;
-            console.log(`⚠️ Conexão fechada. Motivo / StatusCode: ${reason}`);
             if (reason !== DisconnectReason.loggedOut) {
                 setTimeout(iniciarMotor, 4000);
-            } else {
-                console.log('❌ Sessão desconectada pelo celular. Refaça o emparelhamento.');
             }
         } else if(connection === 'open') {
             isConnected = true;
-            console.log('\n✅ CONECTADO AO WHATSAPP DA TATÁ NO RENDER! (43 9 9982-1401)\n');
+            console.log('\n✅ MOTOR DE RASTREIO E DISPARO CONECTADO!\n');
         }
     });
 }
 
 iniciarMotor();
 
-app.get('/', (req, res) => res.send(`🟢 WhatsApp Engine Online | Status Conectado: ${isConnected}`));
+app.get('/', (req, res) => res.send(`🟢 Engine Ativa | Conectado: ${isConnected}`));
+
+// Rota para o painel consultar as respostas recebidas em tempo real
+app.get('/api/responses', (req, res) => {
+    res.json({ success: true, respostas: ultimasRespostas });
+});
 
 app.post('/api/send', async (req, res) => {
     const { secret, phone, message } = req.body;
     if(secret !== 'senha_secreta_tata_2026') return res.status(401).json({error: 'Não autorizado'});
     
-    // Trava de segurança: impede o erro 428 se o WhatsApp ainda não estiver pronto
     if (!isConnected || !sock) {
-        return res.status(503).json({ error: 'WhatsApp ainda não está sincronizado ou conectado no Render. Aguarde alguns segundos.' });
+        return res.status(503).json({ error: 'WhatsApp reconectando. Tente em instantes.' });
     }
 
     try {
@@ -76,12 +94,11 @@ app.post('/api/send', async (req, res) => {
         const jid = `${cleanPhone}@s.whatsapp.net`;
         
         await sock.sendMessage(jid, { text: message });
-        res.json({ success: true, message: 'Disparo efetuado com sucesso pelo Render.' });
+        res.json({ success: true, message: 'Disparo efetuado.' });
     } catch (error) {
-        console.error('Erro detalhado no envio Baileys:', error);
-        res.status(500).json({ error: 'Falha ao enviar mensagem.', details: error.message });
+        res.status(500).json({ error: 'Falha ao enviar.', details: error.message });
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`⚙️  Servidor Render rodando na porta ${PORT}...`));
+app.listen(PORT, () => console.log(`⚙️ Servidor na porta ${PORT}`));
